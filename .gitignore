@@ -1,0 +1,56 @@
+# ---- data and heavy run artifacts: never uploaded ----
+data/
+datasets/
+outputs/
+figures/
+
+# ---- raw / intermediate array and matrix files ----
+*.npy
+*.npz
+*.h5ad
+*.h5
+*.loom
+*.mtx
+*.csv
+*.tsv
+*.gz
+
+# ---- manuscript and office documents ----
+*.docx
+*.doc
+*.pdf
+*.pptx
+*.ppt
+*.png
+*.jpg
+*.jpeg
+*.tif
+*.tiff
+
+# ---- python ----
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+.venv/
+venv/
+
+# ---- notebooks and checkpoints ----
+.ipynb_checkpoints/
+*.ckpt
+*.pt
+*.pth
+
+# ---- prose drafts (code-only repository) ----
+*.md
+
+# ---- local scratch scripts ----
+examples/_*.py
+
+# ---- os / editor ----
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
