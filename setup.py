@@ -11,7 +11,9 @@ setup(
         "numpy>=1.23",
         "scipy>=1.10",
         "scikit-learn>=1.2",
-        "anndata>=0.8",
-        "tqdm>=4.65",
     ],
+    extras_require={
+        "data": ["anndata>=0.8", "scanpy>=1.9"],
+        "viz": ["matplotlib>=3.6", "tqdm>=4.65"],
+    },
 )

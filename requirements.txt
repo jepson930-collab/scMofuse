@@ -1,8 +1,13 @@
+# scMoFuse runtime requirements (Python >= 3.8).
+# The core model and examples/run_demo.py need only these four packages.
 torch>=1.13
 numpy>=1.23
 scipy>=1.10
 scikit-learn>=1.2
-anndata>=0.8
-scanpy>=1.9
-tqdm>=4.65
-matplotlib>=3.6
+
+# Optional extras -- only needed to read .h5ad data, build AnnData objects,
+# render figures, or show progress bars. Not required by the model or the demo.
+# anndata>=0.8
+# scanpy>=1.9
+# matplotlib>=3.6
+# tqdm>=4.65

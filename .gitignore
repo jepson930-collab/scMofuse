@@ -43,10 +43,15 @@ venv/
 *.pt
 *.pth
 
-# ---- prose drafts (code-only repository) ----
+# ---- prose drafts ----
+# Ignore authoring drafts, but always ship the repository front page and
+# any documentation diagrams placed under docs/.
 *.md
+!README.md
+!docs/
+!docs/**
 
-# ---- local scratch scripts ----
+# ---- local scratch scripts (examples/run_*.py stays tracked) ----
 examples/_*.py
 
 # ---- os / editor ----
