@@ -1,19 +1,20 @@
 """
 scMoFuse.model
 ==============
-Main model: scMoFuse — Single-cell Multi-omics Fusion with Adaptive
-Cross-attention and Bilateral contrastive learning.
+Main model: scMoFuse — Single-cell Multi-omics Fusion with Reliability
+Arbitration and cross-level contrastive alignment.
 
 Design rationale (challenges -> modules):
   P1 dimension imbalance          -> per-modality encoders to a common dim
-  P2 mosaic / missing modalities  -> masked cross-attention, mask-aware losses
-  P3 conflicting modality signals -> per-cell differential attention gates
+  P2 mosaic / missing modalities  -> availability-aware token fusion with
+                                     availability-aware losses
+  P3 conflicting modality signals -> per-cell reliability arbitration gates
   P4 count/binary heterogeneity   -> modality-specific likelihoods when raw
                                      counts are available; Gaussian/MSE fallback
                                      for pre-normalised matrices
   P5 modality / batch bias        -> adversarial discriminators trained with a
                                      separate optimiser (min-max GAN)
-  P6 cell- vs feature-level align -> bilateral contrast: cell-level InfoNCE plus
+  P6 cell- vs feature-level align -> cross-level contrast: cell-level InfoNCE plus
                                      feature-level InfoNCE over explicit
                                      correspondences (protein-gene / peak-gene),
                                      with per-feature embeddings.
@@ -24,11 +25,11 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from .modules import (
-    ModalityEncoder, ModalityDecoder, DifferentialAttention,
-    MaskedCrossAttentionFusion, Discriminator, ClusteringHead, FeatureEncoder,
+    ModalityEncoder, ModalityDecoder, ReliabilityArbitrationGate,
+    AvailabilityAwareFusion, Discriminator, ClusteringHead, FeatureEncoder,
 )
 from .losses import (
-    InfoNCE, BilateralContrastiveLoss, ReconstructionLoss, KLDivLoss, DDCLoss,
+    InfoNCE, CrossLevelContrastiveLoss, ReconstructionLoss, KLDivLoss, DivergenceClusteringLoss,
     PairedFeatureLoss,
 )
 
@@ -47,11 +48,12 @@ class scMoFuse(nn.Module):
         modality_types=None,        # dict: modality -> "rna"/"atac"/"protein"/"other"
         n_batches=1,
         use_adversarial=True,
-        use_bilateral=True,
+        use_clca=True,
         use_clustering=True,
         use_feature_contrast=True,
-        use_differential=True,
-        use_masked_fusion=True,
+        use_reliability=True,
+        use_availability_fusion=True,
+        gate_mode="soft",
         device="cpu",
     ):
         super().__init__()
@@ -60,11 +62,12 @@ class scMoFuse(nn.Module):
         self.n_clusters = n_clusters
         self.n_batches = n_batches
         self.use_adversarial = use_adversarial
-        self.use_bilateral = use_bilateral
+        self.use_clca = use_clca
         self.use_clustering = use_clustering
         self.use_feature_contrast = use_feature_contrast
-        self.use_differential = use_differential
-        self.use_masked_fusion = use_masked_fusion
+        self.use_reliability = use_reliability
+        self.use_availability_fusion = use_availability_fusion
+        self.gate_mode = gate_mode
         self.device = device
 
         if modality_types is None:
@@ -92,8 +95,9 @@ class scMoFuse(nn.Module):
                 torch.zeros(0, 2, dtype=torch.long))
 
         # --- cross-attention fusion (handles mosaic via masking) ---
-        self.diff_attn = DifferentialAttention(latent_dim, num_heads=4, dropout=dropout)
-        self.fusion = MaskedCrossAttentionFusion(
+        self.arb_gate = ReliabilityArbitrationGate(
+            latent_dim, num_heads=4, dropout=dropout, gate_mode=gate_mode)
+        self.fusion = AvailabilityAwareFusion(
             latent_dim, num_heads=4,
             num_modalities=len(self.modalities),
             mask_prob=mask_prob, dropout=dropout,
@@ -108,13 +112,13 @@ class scMoFuse(nn.Module):
 
         # --- losses ---
         self.contrastive = InfoNCE(temperature=temperature)
-        self.bilateral = BilateralContrastiveLoss(temperature=temperature)
+        self.clca = CrossLevelContrastiveLoss(temperature=temperature)
         self.feature_loss = PairedFeatureLoss(temperature=0.1)
         self.recon_losses = nn.ModuleDict({
             m: ReconstructionLoss(modality_types[m]) for m in self.modalities
         })
         self.kl_loss = KLDivLoss()
-        self.ddc_loss = DDCLoss(n_clusters, device=device)
+        self.div_loss = DivergenceClusteringLoss(n_clusters, device=device)
 
         # --- adversarial discriminators ---
         if use_adversarial:
@@ -153,12 +157,12 @@ class scMoFuse(nn.Module):
             present = torch.stack(
                 [masks[m].bool() for m in self.modalities], dim=1)
 
-        if self.use_differential:
+        if self.use_reliability:
             if len(emb_list) == 2:
                 e1, e2 = emb_list[0], emb_list[1]
                 if masks is not None:
                     # replace a missing view by the observed view so the
-                    # differential block degenerates to identity
+                    # arbitration block degenerates to identity
                     p1 = masks[self.modalities[0]].bool().unsqueeze(1)
                     p2 = masks[self.modalities[1]].bool().unsqueeze(1)
                     e1u = torch.where(p1, e1, e2)
@@ -166,19 +170,19 @@ class scMoFuse(nn.Module):
                 else:
                     e1u, e2u = e1, e2
                 if return_gate:
-                    fused, gate = self.diff_attn(
+                    fused, gate = self.arb_gate(
                         e1u, e2u, return_gate=True)
                 else:
-                    fused = self.diff_attn(e1u, e2u)
+                    fused = self.arb_gate(e1u, e2u)
             else:
                 fused = emb_list[0]
                 for i in range(1, len(emb_list)):
-                    fused = self.diff_attn(fused, emb_list[i])
+                    fused = self.arb_gate(fused, emb_list[i])
         else:
-            # ablation: plain equal-weight averaging instead of differential
+            # ablation: plain equal-weight averaging instead of arbitration
             fused = torch.stack(emb_list, dim=0).mean(dim=0)
 
-        if self.use_masked_fusion:
+        if self.use_availability_fusion:
             masked_joint = self.fusion(
                 emb_list, training=training, present=present)
             joint_full = F.normalize(masked_joint + 0.5 * fused, dim=1)
@@ -298,10 +302,10 @@ class scMoFuse(nn.Module):
         w = {
             "recon": weights.get("recon", 1.0),
             "contrast": weights.get("contrast", 1.0),
-            "bilateral": weights.get("bilateral", 1.0),
+            "clca": weights.get("clca", 1.0),
             "feature": weights.get("feature", 1.0),
             "kl": weights.get("kl", 0.1),
-            "ddc": weights.get("ddc", 0.1),
+            "div": weights.get("div", 0.1),
             "adv": weights.get("adv", 1.0),
         }
 
@@ -311,7 +315,7 @@ class scMoFuse(nn.Module):
         q = out["q"]
         losses = {}
 
-        # 1. reconstruction (modality-specific likelihood, mask-aware)
+        # 1. reconstruction (modality-specific likelihood, availability-aware)
         recon_loss = 0.0
         for m in self.modalities:
             if masks is not None and m in masks:
@@ -341,19 +345,19 @@ class scMoFuse(nn.Module):
                 n_pairs += 1
         losses["contrast"] = contrast_loss / max(n_pairs, 1)
 
-        # 3. bilateral cell-level contrastive (only for co-present cells)
-        if self.use_bilateral and masks is not None:
-            bilateral_loss = 0.0
+        # 3. cross-level cell-level contrastive (only for co-present cells)
+        if self.use_clca and masks is not None:
+            clca_loss = 0.0
             for i in range(len(mods)):
                 for j in range(i + 1, len(mods)):
                     paired = masks[mods[i]] & masks[mods[j]]
                     if paired.sum() > 1:
-                        cell_loss, _ = self.bilateral(
+                        cell_loss, _ = self.clca(
                             z_norm[mods[i]], z_norm[mods[j]], paired)
-                        bilateral_loss = bilateral_loss + cell_loss
-            losses["bilateral"] = bilateral_loss / max(n_pairs, 1)
+                        clca_loss = clca_loss + cell_loss
+            losses["clca"] = clca_loss / max(n_pairs, 1)
         else:
-            losses["bilateral"] = torch.tensor(0.0, device=self.device)
+            losses["clca"] = torch.tensor(0.0, device=self.device)
 
         # 3b. feature-level contrastive over explicit correspondences
         if self.use_feature_contrast and out.get("feat") is not None \
@@ -373,10 +377,10 @@ class scMoFuse(nn.Module):
                 and getattr(self, "cluster_enabled", True):
             p = self.cluster_head.target_distribution(q)
             losses["kl"] = self.kl_loss(q, p)
-            losses["ddc"] = self.ddc_loss(q, joint)
+            losses["div"] = self.div_loss(q, joint)
         else:
             losses["kl"] = torch.tensor(0.0, device=self.device)
-            losses["ddc"] = torch.tensor(0.0, device=self.device)
+            losses["div"] = torch.tensor(0.0, device=self.device)
 
         # 5. encoder-side adversarial objective.
         #    The discriminator is frozen (its own optimiser handles its
@@ -398,10 +402,10 @@ class scMoFuse(nn.Module):
 
         total = (w["recon"] * losses["recon"]
                  + w["contrast"] * losses["contrast"]
-                 + w["bilateral"] * losses["bilateral"]
+                 + w["clca"] * losses["clca"]
                  + w["feature"] * losses["feature"]
                  + w["kl"] * losses["kl"]
-                 + w["ddc"] * losses["ddc"]
+                 + w["div"] * losses["div"]
                  + w["adv"] * losses["adv"])
         return total, losses
 

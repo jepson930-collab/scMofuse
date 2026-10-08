@@ -1,4 +1,4 @@
-"""scMoFuse — Single-cell Multi-omics Fusion with Adaptive Cross-attention."""
+"""scMoFuse — Single-cell Multi-omics Fusion with Reliability Arbitration."""
 
 from .model import scMoFuse
 from .data import (

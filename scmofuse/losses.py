@@ -3,10 +3,10 @@ scMoFuse.losses
 ===============
 Loss functions for multi-omics fusion.
 
-- InfoNCE / CLIP-style contrastive (ACE, scPairing)
-- Bilateral cell-level & feature-level contrastive (BiCLUM)
-- Reconstruction loss with modality-specific likelihoods (scPairing)
-- Deep divergence clustering loss / KL on soft assignments (scECDA, scMUSCLE)
+- InfoNCE / CLIP-style contrastive alignment
+- Cross-level cell- and feature-level contrastive alignment
+- Reconstruction loss with modality-specific likelihoods
+- Divergence-based clustering loss / KL on soft assignments
 """
 
 import torch
@@ -39,9 +39,9 @@ class InfoNCE(nn.Module):
 
 
 # ---------------------------------------------------------------------------
-# Bilateral contrastive loss (cell-level + feature-level) from BiCLUM
+# Cross-level contrastive loss (cell-level + feature-level)
 # ---------------------------------------------------------------------------
-class BilateralContrastiveLoss(nn.Module):
+class CrossLevelContrastiveLoss(nn.Module):
     def __init__(self, temperature=0.1):
         super().__init__()
         self.tau = temperature
@@ -147,8 +147,8 @@ class KLDivLoss(nn.Module):
         return F.kl_div(q.log(), p, reduction="batchmean")
 
 
-class DDCLoss(nn.Module):
-    """Deep divergence-based clustering loss (scECDA)."""
+class DivergenceClusteringLoss(nn.Module):
+    """Divergence-based clustering loss (Cauchy-Schwarz divergence)."""
 
     def __init__(self, num_cluster, rel_sigma=0.15, device="cpu"):
         super().__init__()

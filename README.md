@@ -1,7 +1,7 @@
 # scMoFuse
 
-**Single-cell multi-omics fusion with adaptive cross-attention, differential
-gating and bilateral contrastive learning.**
+**Single-cell multi-omics fusion with reliability arbitration,
+availability-aware token fusion and cross-level contrastive alignment.**
 
 scMoFuse is an unsupervised deep-learning framework that integrates paired or
 *partially observed* (mosaic) single-cell modalities — e.g. scRNA-seq +
@@ -23,12 +23,12 @@ Each design element maps to a concrete problem in multi-omics integration:
 | Problem | Module in `scmofuse/` | Option |
 | --- | --- | --- |
 | Modality dimension imbalance (RNA ≫ protein) | per-modality MLP encoders to a shared latent dim | `ModalityEncoder` |
-| Mosaic / missing modalities | masked cross-attention fusion, mask-aware losses | `use_masked_fusion` |
-| Conflicting modality signals | per-cell differential attention gate | `use_differential` |
+| Mosaic / missing modalities | availability-aware token fusion, availability-aware losses | `use_availability_fusion` |
+| Conflicting modality signals | per-cell reliability arbitration gate | `use_reliability` |
 | Count vs. binary heterogeneity | modality-specific likelihoods (NB / Bernoulli / Gaussian) | `ReconstructionLoss` |
 | Modality / batch bias | adversarial discriminators (separate optimiser) | `use_adversarial` |
-| Cell- and feature-level alignment | bilateral cell-level InfoNCE + feature-level InfoNCE over explicit correspondences | `use_bilateral`, `use_feature_contrast` |
-| Cell-type structure | Student-t clustering head + KL / DDC objectives | `use_clustering` |
+| Cell- and feature-level alignment | cross-level cell-level InfoNCE + feature-level InfoNCE over explicit correspondences | `use_clca`, `use_feature_contrast` |
+| Cell-type structure | Student-t clustering head + KL / divergence-clustering objectives | `use_clustering` |
 
 All switches above can be turned off individually, which makes the model a
 direct drop-in for ablation studies.
@@ -163,7 +163,7 @@ dataset = MultiOmicsDataset({"rna": rna, "atac": atac}, masks=masks)
 ```
 
 Missing entries are zeroed before encoding, excluded from the reconstruction and
-contrastive terms, and handled by the masked cross-attention fusion. Cells with a
+contrastive terms, and handled by availability-aware token fusion. Cells with a
 single observed modality are represented by that modality alone.
 
 ### Feature-level correspondences (optional)
@@ -200,10 +200,10 @@ scMoFuse/
 ├── scmofuse/
 │   ├── __init__.py     # public API
 │   ├── model.py        # scMoFuse model (encoder/fusion/losses wiring)
-│   ├── modules.py      # encoders, decoders, differential & masked cross-attention,
+│   ├── modules.py      # encoders, decoders, reliability arbitration & availability-aware
 │   │                   # discriminators, feature encoder, clustering head
-│   ├── losses.py       # InfoNCE, bilateral / feature contrast, NB-Bernoulli recon,
-│   │                   # KL and DDC clustering objectives
+│   ├── losses.py       # InfoNCE, cross-level / feature contrast, NB-Bernoulli recon,
+│   │                   # KL and divergence-clustering objectives
 │   ├── data.py         # dataset, collation, preprocessing helpers
 │   ├── evaluate.py     # clustering & integration metrics
 │   └── utils.py        # seeding, mosaic masks

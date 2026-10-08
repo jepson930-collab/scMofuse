@@ -3,13 +3,14 @@ scMoFuse.modules
 ================
 Core neural network modules for single-cell multi-omics fusion.
 
-Incorporates design elements from 6 recent top-tier methods:
-- scECDA  (Bioinformatics 2025): shared encoder + differential attention (DiffFormer)
-- BiCLUM  (PLOS Comp Bio): bilateral cell/feature contrastive + bilinear decoder
-- scMUSCLE (Brief Bioinform 2026): multi-subspace contrastive + adaptive graph conv
-- scPairing (Cell Rep Methods 2025): CLIP-style hyperspherical VAE + adversarial disc
-- ACE    (Genomics Proteomics Bioinf 2025): mosaic alignment + InfoNCE
-- scMMAE (Brief Bioinform 2025): masked cross-attention multimodal autoencoder
+Design notes
+------------
+Modality-specific encoders map every omics view into one latent space; a
+per-cell reliability arbitration gate reweights the views by how informative
+each is for the cell; availability-aware token fusion lets the model consume
+any observed subset of views; modality-specific likelihoods handle count,
+binary and continuous inputs; an adversarial branch removes modality/batch
+bias; and a prototype head yields cluster assignments.
 """
 
 import math
@@ -77,18 +78,19 @@ class ModalityDecoder(nn.Module):
 
 
 # ---------------------------------------------------------------------------
-# Differential attention (inspired by scECDA's DiffFormer)
+# Reliability arbitration gate
 # ---------------------------------------------------------------------------
-class DifferentialAttention(nn.Module):
-    """Differential attention that emphasises modality-specific signal.
+class ReliabilityArbitrationGate(nn.Module):
+    """Reliability arbitration gate that emphasises modality-specific signal.
 
     Given two modality embeddings Z1, Z2, computes the difference and uses it
     as a gating signal so that the fusion pays more attention to the modality
     carrying more information for each cell.
     """
 
-    def __init__(self, latent_dim, num_heads=4, dropout=0.1):
+    def __init__(self, latent_dim, num_heads=4, dropout=0.1, gate_mode="soft"):
         super().__init__()
+        self.gate_mode = gate_mode
         self.norm1 = nn.LayerNorm(latent_dim)
         self.norm2 = nn.LayerNorm(latent_dim)
         self.attn = nn.MultiheadAttention(latent_dim, num_heads,
@@ -97,6 +99,9 @@ class DifferentialAttention(nn.Module):
             nn.Linear(latent_dim * 2, latent_dim),
             nn.Sigmoid()
         )
+        if gate_mode == "global":
+            # one dataset-level weight shared by every cell and dimension
+            self.global_logit = nn.Parameter(torch.zeros(1))
         self.ffn = nn.Sequential(
             nn.Linear(latent_dim, latent_dim * 2),
             nn.GELU(),
@@ -114,9 +119,18 @@ class DifferentialAttention(nn.Module):
         z2_seq = z2.unsqueeze(1)
         attn_out, _ = self.attn(z1_seq, z2_seq, z2_seq)
         attn_out = attn_out.squeeze(1)     # (B, D)
-        # differential gating
+        # reliability arbitration
         diff = torch.cat([z1 - z2, z1 + z2], dim=1)
-        gate = self.gate(diff)             # (B, D)
+        soft = self.gate(diff)             # (B, D)
+        if self.gate_mode == "hard":
+            # binarised per-cell gate, straight-through gradient
+            hard = (soft > 0.5).float()
+            gate = hard + soft - soft.detach()
+        elif self.gate_mode == "global":
+            # dataset-level modality weight (no per-cell variation)
+            gate = torch.sigmoid(self.global_logit).expand_as(soft)
+        else:
+            gate = soft
         fused = attn_out * gate + z1 * (1 - gate)
         fused = self.norm3(fused + self.ffn(fused))
         if return_gate:
@@ -125,9 +139,9 @@ class DifferentialAttention(nn.Module):
 
 
 # ---------------------------------------------------------------------------
-# Masked cross-attention fusion (inspired by scMMAE)
+# Availability-aware token fusion
 # ---------------------------------------------------------------------------
-class MaskedCrossAttentionFusion(nn.Module):
+class AvailabilityAwareFusion(nn.Module):
     """Fuses multiple modality embeddings with random masking.
 
     During training, each modality embedding is randomly dropped with prob p.
@@ -172,9 +186,9 @@ class MaskedCrossAttentionFusion(nn.Module):
 
 
 # ---------------------------------------------------------------------------
-# Bilinear decoder (inspired by BiCLUM) for feature-level reconstruction
+# Feature reconstruction decoder for feature-level reconstruction
 # ---------------------------------------------------------------------------
-class BilinearDecoder(nn.Module):
+class FeatureReconstructionDecoder(nn.Module):
     def __init__(self, latent_dim):
         super().__init__()
         self.scale = nn.Parameter(torch.zeros(latent_dim))
@@ -187,7 +201,7 @@ class BilinearDecoder(nn.Module):
 
 
 # ---------------------------------------------------------------------------
-# Adversarial discriminator (inspired by scPairing)
+# Adversarial discriminator
 # ---------------------------------------------------------------------------
 class Discriminator(nn.Module):
     def __init__(self, latent_dim, n_classes=2, hidden=128):
@@ -246,7 +260,7 @@ class FeatureEncoder(nn.Module):
 
 
 # ---------------------------------------------------------------------------
-# Prototype / centroid based clustering head (inspired by scECDA/scMUSCLE)
+# Prototype / centroid based clustering head
 # ---------------------------------------------------------------------------
 class ClusteringHead(nn.Module):
     def __init__(self, latent_dim, n_clusters, alpha=1.0):
